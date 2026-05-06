@@ -1,0 +1,34 @@
+{
+  "environment": "dev",
+  "user": {
+    "id": "example-user",
+    "displayName": "Example User"
+  },
+  "permissions": [],
+  "flags": [],
+  "features": [
+    {
+      "featureKey": "{{ names.feature_key }}",
+      "displayName": "{{ names.display_name }}",
+      "route": "{{ names.base_path }}",
+      "version": "{{ manifest_version }}",
+      "nav": {
+        "label": "{{ names.display_name }}",
+        "icon": "package"
+      },
+      "frontend": {
+        "entryUrl": "/features/{{ names.feature_key }}/assets/bootstrap.js"
+      },
+      "backend": {
+        "apiBaseUrl": "/api/{{ names.feature_key }}"
+      },
+      "authorization": {
+        "requiredPermissions": [],
+        "requiredFlags": []
+      }
+    }
+  ],
+  "metadata": {
+    "source": "bootstrap-service"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "environment": "local",
+  "user": {
+    "id": "local-dev",
+    "displayName": "Local Developer",
+    "email": "dev@local"
+  },
+  "permissions": ["*"],
+  "flags": {},
+  "features": [
+    {
+      "featureKey": "asset-inventory",
+      "displayName": "IT Asset Inventory",
+      "route": "/inventory/it",
+      "version": "0.1.0",
+      "nav": {
+        "label": "IT Asset Inventory",
+        "icon": "package"
+      },
+      "frontend": {
+        "entryUrl": "http://localhost:3200/src/bootstrap-entry.tsx",
+        "mountFunction": "mount",
+        "enabled": true
+      },
+      "backend": {
+        "apiBaseUrl": "http://localhost:8100/api/inventory/it",
+        "healthEndpoint": "/health",
+        "enabled": true
+      },
+      "authorization": {
+        "requiredPermissions": [],
+        "requiredFlags": []
+      },
+      "auth": {
+        "required": true,
+        "mode": "mock",
+        "shellAuthRequired": true,
+        "tokenForwarding": false
+      }
+    }
+  ],
+  "metadata": {
+    "source": "local-mock",
+    "generatedBy": "feature-scaffold"
+  }
+}

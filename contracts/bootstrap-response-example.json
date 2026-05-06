@@ -1,0 +1,36 @@
+{
+  "environment": "dev",
+  "user": {
+    "id": "example-user",
+    "displayName": "Example User",
+    "email": "example.user@example.com"
+  },
+  "permissions": [],
+  "flags": [],
+  "features": [
+    {
+      "featureKey": "asset-inventory",
+      "displayName": "IT Asset Inventory",
+      "route": "/inventory/it",
+      "version": "0.1.0",
+      "nav": {
+        "label": "IT Asset Inventory",
+        "icon": "package"
+      },
+      "frontend": {
+        "entryUrl": "/features/asset-inventory/assets/bootstrap.js"
+      },
+      "backend": {
+        "apiBaseUrl": "/api/asset-inventory"
+      },
+      "authorization": {
+        "requiredPermissions": [],
+        "requiredFlags": []
+      }
+    }
+  ],
+  "metadata": {
+    "source": "bootstrap-service",
+    "generatedBy": "feature-scaffold"
+  }
+}

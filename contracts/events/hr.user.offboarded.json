@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UserOffboarded",
+  "description": "Schema stub for hr.user.offboarded",
+  "type": "object",
+  "properties": {
+    "correlationId": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "payload": { "type": "object", "additionalProperties": true }
+  },
+  "required": ["payload"],
+  "additionalProperties": true
+}

@@ -1,0 +1,180 @@
+name: Deploy Feature Dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+      - dev
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    environment: dev
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      FEATURE_KEY: asset-inventory
+      TF_WORKING_DIR: infra/terraform
+      DEPLOY_ENVIRONMENT: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve deployment authorization policy
+        run: |
+          AUTH_REQUIRED_PERMISSIONS_RAW="$(jq -r '.authorization.requiredPermissions // [] | join(",")' contracts/feature-manifest.json)"
+
+          if [ -z "$AUTH_REQUIRED_PERMISSIONS_RAW" ]; then
+            echo "contracts/feature-manifest.json must define authorization.requiredPermissions."
+            exit 1
+          fi
+
+          echo "AUTH_REQUIRED_PERMISSIONS_RAW=$AUTH_REQUIRED_PERMISSIONS_RAW" >> "$GITHUB_ENV"
+          echo "Resolved AUTH_REQUIRED_PERMISSIONS_RAW=$AUTH_REQUIRED_PERMISSIONS_RAW"
+
+      - name: Set up Node
+        if: ${{ hashFiles('frontend/**') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        if: ${{ hashFiles('backend/**', 'scripts/render-manifest.py', 'scripts/validate-manifest.py', 'scripts/render-registry-payload.py', 'scripts/run-migrations.sh') != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate required secrets
+        run: |
+          test -n "${{ secrets.AZURE_CLIENT_ID }}"
+          test -n "${{ secrets.AZURE_TENANT_ID }}"
+          test -n "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          test -n "${{ secrets.AZURE_RESOURCE_GROUP_NAME }}"
+          test -n "${{ secrets.AZURE_CONTAINER_APPS_ENVIRONMENT_ID }}"
+
+      - name: Build frontend app and microfrontend bundle
+        if: ${{ hashFiles('frontend/**') != '' }}
+        env:
+          VITE_AUTH_MODE: ${{ vars.VITE_AUTH_MODE || 'mock' }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || format('/{0}', '/api/inventory/it') }}
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Upload frontend microfrontend artifact
+        if: ${{ hashFiles('frontend/dist/mf/**') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-mf-build-dev
+          path: frontend/dist/mf
+
+      - name: Build backend dependencies
+        if: ${{ hashFiles('backend/**') != '' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./backend
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Terraform
+        if: ${{ hashFiles('infra/terraform/**') != '' }}
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        if: ${{ hashFiles('infra/terraform/**') != '' }}
+        run: |
+          cd $TF_WORKING_DIR
+          terraform init
+
+      - name: Show deployment auth settings
+        if: ${{ hashFiles('infra/terraform/**') != '' }}
+        run: |
+          echo "Environment: dev"
+          echo "AUTH_MODE: ${{ vars.AUTH_MODE || 'mock' }}"
+          echo "AUTH_DEBUG_HEADERS_ENABLED: ${{ vars.AUTH_DEBUG_HEADERS_ENABLED || 'true' }}"
+          echo "AUTH_REQUIRED_PERMISSIONS_RAW: $AUTH_REQUIRED_PERMISSIONS_RAW"
+          echo "VITE_AUTH_MODE: ${{ vars.VITE_AUTH_MODE || 'mock' }}"
+          echo "VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || format('/{0}', '/api/inventory/it') }}"
+          echo "CACHE_BACKEND: ${{ vars.CACHE_BACKEND || 'memory' }}"
+
+      - name: Terraform apply
+        if: ${{ hashFiles('infra/terraform/**') != '' }}
+        run: |
+          cd $TF_WORKING_DIR
+          terraform apply -auto-approve \
+            -var-file=dev.tfvars \
+            -var="environment=dev" \
+            -var="resource_group_name=${{ secrets.AZURE_RESOURCE_GROUP_NAME }}" \
+            -var="container_environment_id=${{ secrets.AZURE_CONTAINER_APPS_ENVIRONMENT_ID }}" \
+            -var="backend_image=${{ secrets.BACKEND_IMAGE }}" \
+            -var="worker_image=${{ secrets.WORKER_IMAGE }}" \
+            -var="auth_mode=${{ vars.AUTH_MODE || 'mock' }}" \
+            -var="auth_debug_headers_enabled=${{ vars.AUTH_DEBUG_HEADERS_ENABLED || 'true' }}" \
+            -var="auth_required_permissions_raw=$AUTH_REQUIRED_PERMISSIONS_RAW" \
+            -var="entra_tenant_id=${{ vars.ENTRA_TENANT_ID || '' }}" \
+            -var="entra_client_id=${{ vars.ENTRA_CLIENT_ID || '' }}" \
+            -var="entra_audience=${{ vars.ENTRA_AUDIENCE || '' }}" \
+            -var="entra_issuer=${{ vars.ENTRA_ISSUER || '' }}" \
+            -var="entra_jwks_url=${{ vars.ENTRA_JWKS_URL || '' }}" \
+            -var="entra_clock_skew_seconds=${{ vars.ENTRA_CLOCK_SKEW_SECONDS || '60' }}" \
+            -var="frontend_auth_mode=${{ vars.VITE_AUTH_MODE || 'mock' }}" \
+            -var="frontend_api_base_url=${{ vars.VITE_API_BASE_URL || format('/{0}', '/api/inventory/it') }}" \
+            -var="cache_backend=${{ vars.CACHE_BACKEND || 'memory' }}" \
+
+      - name: Capture Terraform outputs
+        if: ${{ hashFiles('infra/terraform/**') != '' }}
+        id: tfout
+        run: |
+          cd $TF_WORKING_DIR
+          echo "backend_fqdn=$(terraform output -raw backend_fqdn 2>/dev/null || true)" >> $GITHUB_OUTPUT
+
+
+      - name: Resolve runtime manifest
+        env:
+          FEATURE_FRONTEND_ENTRY_URL: ${{ secrets.FEATURE_FRONTEND_ENTRY_URL }}
+          FEATURE_BACKEND_BASE_URL: ${{ steps.tfout.outputs.backend_fqdn != '' && format('https://{0}/api/asset-inventory', steps.tfout.outputs.backend_fqdn) || format('/api/asset-inventory') }}
+          FEATURE_ENVIRONMENT: dev
+        run: |
+          python scripts/render-manifest.py
+
+      - name: Validate resolved manifest
+        run: |
+          python scripts/validate-manifest.py
+
+      - name: Render registry payload
+        run: |
+          python scripts/render-registry-payload.py
+
+      - name: Upload resolved manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolved-feature-manifest-dev
+          path: build/feature-manifest.resolved.json
+
+      - name: Upload registry payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-payload-dev
+          path: build/registry-payload.json
+
+      - name: Publish resolved manifest to registry
+        if: true
+        env:
+          REGISTRY_BASE_URL: ${{ secrets.REGISTRY_BASE_URL }}
+          REGISTRY_API_TOKEN: ${{ secrets.REGISTRY_API_TOKEN }}
+        run: |
+          curl -X POST "$REGISTRY_BASE_URL/api/releases" \
+            -H "Authorization: Bearer $REGISTRY_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @build/registry-payload.json

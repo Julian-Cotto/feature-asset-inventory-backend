@@ -1,0 +1,82 @@
+# -----------------------------
+# OS / Editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# -----------------------------
+# Node / Frontend
+# -----------------------------
+node_modules/
+dist/
+coverage/
+
+# Vite cache
+.vite/
+
+# -----------------------------
+# Environment files (IMPORTANT)
+# -----------------------------
+.env
+.env.*
+!.env.example
+
+# -----------------------------
+# Logs
+# -----------------------------
+*.log
+logs/
+
+# -----------------------------
+# Local SQLite stub / runtime data
+# -----------------------------
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# -----------------------------
+# Lint / type-check caches
+# -----------------------------
+.mypy_cache/
+.ruff_cache/
+
+# -----------------------------
+# Testing / coverage
+# -----------------------------
+htmlcov/
+.pytest_cache/
+
+# -----------------------------
+# Terraform (if present)
+# -----------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# -----------------------------
+# Misc
+# -----------------------------
+*.tmp
+*.bak

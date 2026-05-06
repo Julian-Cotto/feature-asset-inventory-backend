@@ -1,0 +1,52 @@
+# Example Terraform variables for local/dev usage
+
+name_prefix            = "asset-inventory"
+environment            = "dev"
+location               = "eastus"
+resource_group_name    = "rg-asset-inventory-dev"
+# create_resource_group = false  # default is true: each feature gets its own RG; set false to reuse an existing RG
+
+container_environment_id = ""
+
+backend_enabled = true
+
+backend_image = "ghcr.io/your-org/asset-inventory:latest"
+
+api_container_app_name = "asset-inventory-api"
+
+api_port = 8000
+
+tags = {
+  feature     = "asset-inventory"
+  environment = "dev"
+}
+
+# Scheduled jobs
+scheduled_jobs = []
+scheduled_job_images = {}
+scheduled_job_container_app_names = {}
+
+# Event-driven workers
+event_driven_jobs = []
+event_worker_images = {}
+event_worker_container_app_names = {}
+
+# Event listeners
+event_listeners = []
+listener_images = {}
+listener_container_app_names = {}
+
+auth_mode                  = "mock"
+auth_debug_headers_enabled = true
+
+entra_tenant_id            = ""
+entra_client_id            = ""
+entra_audience             = ""
+entra_issuer               = ""
+entra_jwks_url             = ""
+entra_clock_skew_seconds   = 60
+
+frontend_auth_mode         = "mock"
+frontend_api_base_url      = "//api/inventory/it"
+
+cache_backend = "memory"

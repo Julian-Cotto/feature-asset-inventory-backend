@@ -1,0 +1,51 @@
+# Example Terraform variables for test usage
+
+name_prefix            = "asset-inventory"
+environment            = "test"
+location               = "eastus"
+resource_group_name    = "rg-asset-inventory-test"
+
+container_environment_id = ""
+
+backend_enabled = true
+
+backend_image = "ghcr.io/your-org/asset-inventory:test"
+
+api_container_app_name = "asset-inventory-api-test"
+
+api_port = 8000
+
+tags = {
+  feature     = "asset-inventory"
+  environment = "test"
+}
+
+# Scheduled jobs
+scheduled_jobs = []
+scheduled_job_images = {}
+scheduled_job_container_app_names = {}
+
+# Event-driven workers
+event_driven_jobs = []
+event_worker_images = {}
+event_worker_container_app_names = {}
+
+# Event listeners
+event_listeners = []
+listener_images = {}
+listener_container_app_names = {}
+
+auth_mode                  = "entra"
+auth_debug_headers_enabled = false
+
+entra_tenant_id            = "00000000-0000-0000-0000-000000000000"
+entra_client_id            = "00000000-0000-0000-0000-000000000000"
+entra_audience             = ""
+entra_issuer               = ""
+entra_jwks_url             = ""
+entra_clock_skew_seconds   = 60
+
+frontend_auth_mode         = "entra"
+frontend_api_base_url      = "//api/inventory/it"
+
+cache_backend = "memory"

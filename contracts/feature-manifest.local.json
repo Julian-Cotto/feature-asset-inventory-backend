@@ -1,0 +1,67 @@
+{
+  "featureKey": "asset-inventory",
+  "displayName": "IT Asset Inventory",
+  "description": "IT asset inventory: laptops, desktops, thin clients. Onboarding, location/user assignment, status tracking, offboarding/archive.",
+  "version": "0.1.1",
+  "environment": "local",
+  "route": "/inventory/it",
+  "basePath": "/inventory/it",
+  "frontend": {
+    "enabled": true,
+    "entryStrategy": "vite-dynamic-import",
+    "entryUrl": "http://localhost:3200/src/bootstrap-entry.tsx",
+    "mountFunction": "mount"
+  },
+  "backend": {
+    "enabled": true,
+    "apiBaseUrl": "http://localhost:8200/api/inventory/it",
+    "baseUrl": "http://localhost:8200/api/inventory/it",
+    "healthEndpoint": "http://localhost:8200/api/inventory/it/health"
+  },
+  "nav": {
+    "label": "IT Inventory",
+    "icon": "laptop",
+    "group": "Inventory",
+    "order": 10
+  },
+  "navigation": {
+    "label": "IT Inventory",
+    "icon": "laptop"
+  },
+  "authorization": {
+    "requiredPermissions": ["asset-inventory.view"],
+    "requiredFlags": ["asset-inventory.enabled"]
+  },
+  "auth": {
+    "required": true,
+    "mode": "entra",
+    "shellAuthRequired": true,
+    "tokenForwarding": true,
+    "tokenStrategy": "forwarded-bearer",
+    "allowedDevModes": ["mock"],
+    "roles": ["admin", "operator", "reader"]
+  },
+  "registry": {
+    "enabled": true,
+    "mode": "rest"
+  },
+  "events": {
+    "publishes": ["asset.onboarded", "asset.assigned", "asset.archived"],
+    "consumes": ["hr.user.offboarded"]
+  },
+  "workers": {
+    "scheduledJobs": ["stale-repair-check"],
+    "eventDrivenJobs": ["process-offboarding"],
+    "eventListeners": ["user-offboarded"]
+  },
+  "metadata": {
+    "ownerTeam": "platform-it",
+    "commitSha": "local",
+    "buildId": "local-0.1.1",
+    "releaseDate": "2026-05-05"
+  },
+  "compatibility": {
+    "shellContractMin": "1.0.0",
+    "shellContractMax": "1.x"
+  }
+}

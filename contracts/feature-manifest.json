@@ -1,0 +1,70 @@
+{
+  "featureKey": "asset-inventory",
+  "displayName": "IT Asset Inventory",
+  "description": "IT asset inventory: laptops, desktops, thin clients. Onboarding, location/user assignment, status tracking, offboarding/archive.",
+  "basePath": "/inventory/it",
+  "navigation": {
+    "label": "IT Asset Inventory",
+    "icon": "package"
+  },
+  "version": "0.1.0",
+  "frontend": {
+    "enabled": true,
+    "entryStrategy": "vite-dynamic-import",
+    "entryUrl": "/features/asset-inventory/assets/bootstrap.js",
+    "mountFunction": "mount"
+  },
+  "backend": {
+    "enabled": true,
+    "baseUrl": "/api/inventory/it",
+    "healthEndpoint": "/api/inventory/it/health"
+  },
+  "authorization": {
+    "requiredPermissions": [
+      "asset-inventory.view"
+    ],
+    "requiredFlags": [
+      "asset-inventory.enabled"
+    ]
+  },
+  "auth": {
+    "required": true,
+    "mode": "entra",
+    "shellAuthRequired": true,
+    "tokenForwarding": true,
+    "tokenStrategy": "forwarded-bearer",
+    "allowedDevModes": [
+      "mock"
+    ],
+    "roles": [
+      "admin",
+      "operator",
+      "reader"
+    ]
+  },
+  "registry": {
+    "enabled": true,
+    "mode": "rest"
+  },
+  "events": {
+    "publishes": [
+      "asset.onboarded",
+      "asset.assigned",
+      "asset.archived"
+    ],
+    "consumes": [
+      "hr.user.offboarded"
+    ]
+  },
+  "workers": {
+    "scheduledJobs": [
+      "stale-repair-check"
+    ],
+    "eventDrivenJobs": [
+      "process-offboarding"
+    ],
+    "eventListeners": [
+      "user-offboarded"
+    ]
+  }
+}
