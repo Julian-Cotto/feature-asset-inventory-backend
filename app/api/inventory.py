@@ -13,6 +13,7 @@ from app.platform.auth_context import RequestAuthContext
 from app.schemas.inventory import (
     AssetArchive,
     AssetAssign,
+    AssetBulkLocation,
     AssetCreate,
     AssetHistoryOut,
     AssetOut,
@@ -21,6 +22,7 @@ from app.schemas.inventory import (
     AssetStatusOut,
     AssetStatusUpdate,
     AssetUpdate,
+    DashboardStats,
     LocationCreate,
     LocationOut,
     LocationUpdate,
@@ -122,6 +124,27 @@ def delete_location_endpoint(
     return None
 
 
+@router.post("/locations/sync")
+def sync_locations_endpoint(
+    dry_run: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    """Mirror corporate locations from Snowflake `LOCATIONS_ALL_V` into the
+    local `Location` table. Idempotent — upsert by `code` (LOCATIONID).
+    Locations missing from the Snowflake result are deactivated, not deleted."""
+
+    from app.services import snowflake_service
+
+    actor_upn = getattr(auth, "user_upn", None) or getattr(auth, "email", None)
+    try:
+        return snowflake_service.sync_locations(
+            db, actor_upn=actor_upn, dry_run=dry_run
+        )
+    except RuntimeError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+
+
 # ----- assets -----
 
 @router.get("/assets", response_model=list[AssetOut])
@@ -131,7 +154,17 @@ def list_assets_endpoint(
     status_code: str | None = Query(default=None),
     location_id: int | None = Query(default=None),
     assigned_upn: str | None = Query(default=None),
+    model: str | None = Query(default=None, description="Exact model match"),
+    manufacturer: str | None = Query(default=None, description="Exact manufacturer match"),
     include_archived: bool = Query(default=False),
+    available_only: bool = Query(
+        default=False,
+        description=(
+            "Only return assets that are in_warehouse AND not reserved by "
+            "an active deployment or open shipment. Forces status_code="
+            "in_warehouse."
+        ),
+    ),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -144,10 +177,70 @@ def list_assets_endpoint(
         status_code=status_code,
         location_id=location_id,
         assigned_upn=assigned_upn,
+        model=model,
+        manufacturer=manufacturer,
         include_archived=include_archived,
+        available_only=available_only,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/assets/facets")
+def get_asset_facets_endpoint(
+    available_only: bool = Query(
+        default=False,
+        description=(
+            "When true, only count assets that are in_warehouse AND not "
+            "reserved by an active deployment / open shipment."
+        ),
+    ),
+    db: Session = Depends(get_db),
+    _: RequestAuthContext = Depends(require_view()),
+):
+    return svc.get_asset_facets(db, available_only=available_only)
+
+
+@router.get("/stats", response_model=DashboardStats)
+def get_dashboard_stats_endpoint(
+    db: Session = Depends(get_db),
+    _: RequestAuthContext = Depends(require_view()),
+):
+    """Aggregated dashboard metrics: assets, warranty, Intune freshness,
+    shipments, deployments, plus 30-day onboarding + warranty-change series."""
+
+    return svc.get_dashboard_stats(db)
+
+
+@router.post("/assets/bulk-location")
+def bulk_set_location_endpoint(
+    payload: AssetBulkLocation,
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    """Set the same location on many assets at once. `location_id=null`
+    clears the location. Records a `location_change` history entry per
+    asset that actually changed."""
+
+    actor_upn = getattr(auth, "user_upn", None) or getattr(auth, "email", None)
+    return svc.bulk_set_location(
+        db,
+        asset_ids=payload.asset_ids,
+        location_id=payload.location_id,
+        actor_upn=actor_upn,
+    )
+
+
+@router.post("/assets/vendor-refresh")
+def refresh_vendor_models_endpoint(
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    """Refresh Lenovo + Dell friendly model names and warranty status for
+    every Lenovo / Dell / unknown-manufacturer asset."""
+
+    actor_upn = getattr(auth, "user_upn", None) or getattr(auth, "email", None)
+    return svc.refresh_vendor_models(db, actor_upn=actor_upn)
 
 
 @router.get("/assets/lookup", response_model=AssetOut)

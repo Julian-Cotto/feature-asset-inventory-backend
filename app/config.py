@@ -47,6 +47,50 @@ class Settings(BaseSettings):
     db_create_all_on_startup: bool = True
     db_seed_default_statuses: bool = True
 
+    # Vendor lookup providers (best-effort device identification by serial)
+    meraki_api_key: str = ""
+    meraki_org_id: str = ""
+    meraki_base_url: str = "https://api.meraki.com/api/v1"
+    lenovo_lookup_enabled: bool = True
+    dell_lookup_enabled: bool = True
+    # Dell warmup chain (Akamai-bypassed via curl_cffi) is slow on first
+    # call. Override default lookup timeout for Dell specifically.
+    dell_lookup_timeout_seconds: float = 20.0
+    lookup_cache_ttl_hours: int = 168  # 7 days
+    lookup_http_timeout_seconds: float = 6.0
+
+    # Carrier tracking — UPS + FedEx OAuth2 client-credentials
+    ups_client_id: str = ""
+    ups_client_secret: str = ""
+    ups_base_url: str = "https://onlinetools.ups.com"  # sandbox: wwwcie.ups.com
+    fedex_api_key: str = ""
+    fedex_secret_key: str = ""
+    fedex_base_url: str = "https://apis.fedex.com"  # sandbox: apis-sandbox.fedex.com
+    tracking_http_timeout_seconds: float = 10.0
+    tracking_auto_refresh_minutes: int = 15
+
+    # Snowflake (corporate locations source-of-truth sync)
+    database_account: str = ""
+    database_user: str = ""
+    database_password: str = ""
+    database_warehouse: str = ""
+    database_name: str = ""
+    database_raw_database: str = ""
+    database_trf_database: str = ""
+    database_csm_database: str = ""
+    database_corporate_schema: str = "CORPORATE"
+    database_app_schema: str = ""
+    database_accounting_schema: str = ""
+    snowflake_locations_cmpycodes: str = "70,S2,20"
+
+    # Microsoft Intune (Graph API, OAuth2 client-credentials)
+    intune_tenant_id: str = ""
+    intune_client_id: str = ""
+    intune_client_secret: str = ""
+    intune_graph_base_url: str = "https://graph.microsoft.com/v1.0"
+    intune_portal_base_url: str = "https://intune.microsoft.com"
+    intune_http_timeout_seconds: float = 10.0
+
     entra_tenant_id: str = ""
     entra_client_id: str = ""
     entra_audience: str = ""

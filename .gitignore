@@ -80,3 +80,5 @@ crash.log
 # -----------------------------
 *.tmp
 *.bak
+# Dev reference (large network captures, not source)
+har/

@@ -7,13 +7,20 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.deployments import router as deployments_router
 from app.api.feature import router as feature_router
 from app.api.health import router as health_router
+from app.api.intune import router as intune_router
 from app.api.inventory import router as inventory_router
+from app.api.lookup import router as lookup_router
+from app.api.shipments import router as shipments_router
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.models import inventory as _inventory_models  # noqa: F401  register ORM tables
-from app.services.inventory_service import seed_default_statuses
+from app.services.inventory_service import (
+    seed_default_locations,
+    seed_default_statuses,
+)
 
 # NOTE: scaffold-generated app/api/platform_capabilities.py and
 # app/api/cache_capabilities.py contain unrendered Jinja placeholders
@@ -24,6 +31,99 @@ request_id_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_id",
     default=None,
 )
+
+
+def _migrate_legacy_statuses(db) -> None:
+    """One-shot data migration. Status now tracks operational state only
+    (active / in_repair / lost / retired). Assignment is derived from
+    `assigned_upn` (Intune-driven). Idempotent — runs every boot, no-op
+    once data is migrated."""
+
+    from sqlalchemy import text
+    from app.models import Asset, AssetStatus, Location
+
+    legacy_codes = ("in_warehouse", "assigned")
+    legacy_count = (
+        db.query(Asset).filter(Asset.status_code.in_(legacy_codes)).count()
+    )
+    if legacy_count == 0:
+        # Still flip is_active=False on legacy rows in case seed re-added them
+        db.execute(
+            text(
+                "UPDATE asset_statuses SET is_active = 0 "
+                "WHERE code IN ('in_warehouse','assigned')"
+            )
+        )
+        db.commit()
+        return
+
+    # Tie former 'in_warehouse' assets to BRENTWOOD-WH if no location set
+    brentwood = (
+        db.query(Location).filter(Location.code == "BRENTWOOD-WH").first()
+    )
+    if brentwood is not None:
+        db.execute(
+            text(
+                "UPDATE assets SET location_id = :loc "
+                "WHERE status_code = 'in_warehouse' AND location_id IS NULL"
+            ),
+            {"loc": brentwood.id},
+        )
+
+    # Flip any legacy status_code → 'active'
+    db.execute(
+        text(
+            "UPDATE assets SET status_code = 'active' "
+            "WHERE status_code IN ('in_warehouse','assigned')"
+        )
+    )
+    # Hide legacy status rows from dropdowns; keep them so AssetHistory
+    # foreign-key-style references stay valid.
+    db.execute(
+        text(
+            "UPDATE asset_statuses SET is_active = 0 "
+            "WHERE code IN ('in_warehouse','assigned')"
+        )
+    )
+    db.commit()
+
+
+def _apply_lightweight_migrations() -> None:
+    """SQLite create_all is a no-op for existing tables. When we add new
+    columns to ORM models we have to ALTER manually. Idempotent: each ADD
+    COLUMN is wrapped to ignore "duplicate column" errors."""
+
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    additions: dict[str, list[tuple[str, str]]] = {
+        "assets": [
+            ("warranty_active", "BOOLEAN"),
+            ("warranty_end_date", "DATETIME"),
+            ("warranty_synced_at", "DATETIME"),
+        ],
+        "device_lookups": [
+            ("warranty_active", "BOOLEAN"),
+            ("warranty_end_date", "DATETIME"),
+        ],
+        "locations": [
+            ("address_line1", "VARCHAR(255)"),
+            ("address_line2", "VARCHAR(255)"),
+            ("city", "VARCHAR(128)"),
+            ("state", "VARCHAR(64)"),
+            ("postal_code", "VARCHAR(32)"),
+            ("country", "VARCHAR(64)"),
+        ],
+    }
+    with engine.begin() as conn:
+        for table, cols in additions.items():
+            if not inspector.has_table(table):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for name, decl in cols:
+                if name in existing:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {decl}"))
 
 logger = logging.getLogger("request")
 
@@ -92,9 +192,12 @@ def create_app() -> FastAPI:
 
     if settings.db_create_all_on_startup:
         Base.metadata.create_all(bind=engine)
+        _apply_lightweight_migrations()
         if settings.db_seed_default_statuses:
             with SessionLocal() as db:
                 seed_default_statuses(db)
+                seed_default_locations(db)
+                _migrate_legacy_statuses(db)
 
     @app.middleware("http")
     async def add_request_context(request: Request, call_next):
@@ -158,6 +261,10 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix=settings.api_base_path)
     app.include_router(feature_router, prefix=settings.api_base_path)
     app.include_router(inventory_router, prefix=settings.api_base_path)
+    app.include_router(lookup_router, prefix=settings.api_base_path)
+    app.include_router(shipments_router, prefix=settings.api_base_path)
+    app.include_router(intune_router, prefix=settings.api_base_path)
+    app.include_router(deployments_router, prefix=settings.api_base_path)
     return app
 
 

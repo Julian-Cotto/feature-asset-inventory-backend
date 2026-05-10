@@ -3,7 +3,9 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 httpx
+curl_cffi
 PyJWT[crypto]
+snowflake-connector-python
 
 sqlalchemy
 
