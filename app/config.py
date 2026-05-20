@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     intune_graph_base_url: str = "https://graph.microsoft.com/v1.0"
     intune_portal_base_url: str = "https://intune.microsoft.com"
     intune_http_timeout_seconds: float = 10.0
+    # Staging UPN whose primary-user-owned devices are considered the
+    # "available pool" for assignment in the Users view. Override per tenant.
+    intune_staging_upn: str = "join@hv.ltd"
 
     entra_tenant_id: str = ""
     entra_client_id: str = ""

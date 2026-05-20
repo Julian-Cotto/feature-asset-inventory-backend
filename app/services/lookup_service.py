@@ -277,6 +277,322 @@ def _meraki_model_to_type(model: str) -> str | None:
     return None
 
 
+# ────────────────────────── Bulk Meraki ─────────────────────────────────
+
+
+def list_all_meraki_devices() -> list[dict]:
+    """Paginated `/organizations/{orgId}/devices` fetch. Returns every
+    device in the org. Raises RuntimeError when not configured."""
+
+    settings = get_settings()
+    api_key = settings.meraki_api_key.strip()
+    org_id = settings.meraki_org_id.strip()
+    if not api_key or not org_id:
+        raise RuntimeError(
+            "Meraki not configured (set MERAKI_API_KEY and MERAKI_ORG_ID)."
+        )
+
+    headers = {
+        "X-Cisco-Meraki-API-Key": api_key,
+        "Accept": "application/json",
+    }
+    base = settings.meraki_base_url.rstrip("/")
+    timeout = settings.lookup_http_timeout_seconds * 5
+
+    devices: list[dict] = []
+    starting_after: str | None = None
+    while True:
+        params: dict[str, object] = {"perPage": 1000}
+        if starting_after:
+            params["startingAfter"] = starting_after
+        resp = _meraki_get(
+            f"{base}/organizations/{org_id}/devices",
+            headers=headers,
+            params=params,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        batch = resp.json() or []
+        if not batch:
+            break
+        devices.extend(batch)
+        if len(batch) < 1000:
+            break
+        last_serial = batch[-1].get("serial")
+        if not last_serial:
+            break
+        starting_after = last_serial
+    return devices
+
+
+def list_meraki_networks() -> dict[str, str]:
+    """Fetch all networks in the org. Returns id → name map. Empty when
+    not configured (caller treats network names as unknown)."""
+
+    records = list_meraki_network_records()
+    return {n["id"]: n.get("name", n["id"]) for n in records}
+
+
+# Per-org Meraki rate limit is 10 req/s. We retry 429 responses up to this
+# many times, honoring the server's `Retry-After` header when present and
+# falling back to exponential backoff otherwise.
+_MERAKI_MAX_RETRIES = 5
+_MERAKI_BASE_BACKOFF = 1.0  # seconds; doubles per retry
+
+
+def _meraki_get(
+    url: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, object] | None = None,
+    timeout: float,
+) -> "httpx.Response":
+    """httpx.get wrapper that retries on 429 with backoff. Respects the
+    `Retry-After` header Meraki sends (in seconds). All other status codes
+    return as-is; caller is responsible for raise_for_status if desired."""
+
+    import time
+
+    delay = _MERAKI_BASE_BACKOFF
+    last: httpx.Response | None = None
+    for attempt in range(_MERAKI_MAX_RETRIES + 1):
+        resp = httpx.get(url, headers=headers, params=params, timeout=timeout)
+        last = resp
+        if resp.status_code != 429:
+            return resp
+        if attempt >= _MERAKI_MAX_RETRIES:
+            break
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            wait = float(retry_after) if retry_after else delay
+        except ValueError:
+            wait = delay
+        # Add small jitter so parallel callers don't sync up and re-thunder.
+        wait = min(wait, 30.0) + (attempt * 0.05)
+        time.sleep(wait)
+        delay = min(delay * 2, 30.0)
+    return last  # type: ignore[return-value]
+
+
+def _meraki_headers_or_none() -> tuple[dict[str, str], str, str, float] | None:
+    """Shared helper — returns (headers, base_url, org_id, timeout) when
+    Meraki creds are configured, else None. Centralises the "is Meraki on?"
+    check so callers can early-out without re-reading settings."""
+
+    settings = get_settings()
+    api_key = settings.meraki_api_key.strip()
+    org_id = settings.meraki_org_id.strip()
+    if not api_key or not org_id:
+        return None
+    return (
+        {
+            "X-Cisco-Meraki-API-Key": api_key,
+            "Accept": "application/json",
+        },
+        settings.meraki_base_url.rstrip("/"),
+        org_id,
+        settings.lookup_http_timeout_seconds * 5,
+    )
+
+
+def list_meraki_network_records() -> list[dict]:
+    """Full network records (not just id→name). Used by network sync to
+    grab tags, timezone, productTypes, etc."""
+
+    bundle = _meraki_headers_or_none()
+    if bundle is None:
+        return []
+    headers, base, org_id, timeout = bundle
+    resp = _meraki_get(
+        f"{base}/organizations/{org_id}/networks",
+        headers=headers,
+        params={"perPage": 1000},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json() or []
+
+
+def list_meraki_org_uplink_statuses() -> dict[str, dict]:
+    """Returns networkId → uplink status record. The org-wide endpoint is
+    one request for the whole fleet (vs hitting per-network), so we prefer
+    it. Each record carries the public IP per WAN port (`uplinks` list)."""
+
+    bundle = _meraki_headers_or_none()
+    if bundle is None:
+        return {}
+    headers, base, org_id, timeout = bundle
+    out: dict[str, dict] = {}
+    starting_after: str | None = None
+    while True:
+        params: dict[str, object] = {"perPage": 1000}
+        if starting_after:
+            params["startingAfter"] = starting_after
+        try:
+            resp = _meraki_get(
+                f"{base}/organizations/{org_id}/appliance/uplink/statuses",
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+        except Exception:
+            return out
+        batch = resp.json() or []
+        if not batch:
+            break
+        for entry in batch:
+            nid = entry.get("networkId")
+            if nid:
+                out[nid] = entry
+        if len(batch) < 1000:
+            break
+        # uplink-statuses doesn't expose a serial cursor; bail after first
+        # page if it didn't return a hint we can paginate on.
+        break
+    return out
+
+
+def get_meraki_appliance_vlans(network_id: str) -> list[dict]:
+    """VLANs configured on the MX appliance for a network. Returns [] when
+    no MX is present (404) or VLANs aren't enabled. Each entry includes
+    `subnet` (CIDR) + `applianceIp` (the gateway IP)."""
+
+    bundle = _meraki_headers_or_none()
+    if bundle is None:
+        return []
+    headers, base, _org_id, timeout = bundle
+    try:
+        resp = _meraki_get(
+            f"{base}/networks/{network_id}/appliance/vlans",
+            headers=headers,
+            timeout=timeout,
+        )
+        if resp.status_code in (400, 404):
+            # 400 → "VLANs are not enabled"; 404 → no MX. Either is benign.
+            return []
+        resp.raise_for_status()
+    except Exception:
+        return []
+    return resp.json() or []
+
+
+def list_meraki_clients_for_network(
+    network_id: str,
+    *,
+    timespan_seconds: int = 7 * 24 * 60 * 60,
+    per_page: int = 1000,
+    max_pages: int = 20,
+) -> list[dict]:
+    """All clients Meraki has seen on this network within `timespan_seconds`
+    (default 7 days). Paginated via Link header `startingAfter`. Tolerates
+    404 / 400 (returns []) so callers can iterate over networks without
+    branching on capability per site."""
+
+    bundle = _meraki_headers_or_none()
+    if bundle is None:
+        return []
+    headers, base, _org_id, timeout = bundle
+
+    out: list[dict] = []
+    starting_after: str | None = None
+    pages = 0
+    while pages < max_pages:
+        params: dict[str, object] = {
+            "perPage": per_page,
+            "timespan": timespan_seconds,
+        }
+        if starting_after:
+            params["startingAfter"] = starting_after
+        try:
+            resp = _meraki_get(
+                f"{base}/networks/{network_id}/clients",
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+            if resp.status_code in (400, 404):
+                return out
+            resp.raise_for_status()
+        except Exception:
+            return out
+        batch = resp.json() or []
+        if not batch:
+            break
+        out.extend(batch)
+        pages += 1
+        if len(batch) < per_page:
+            break
+        # Meraki paginates via Link header `rel="next"` with startingAfter
+        link = resp.headers.get("Link", "")
+        m = None
+        for part in link.split(","):
+            if 'rel="next"' in part:
+                # Extract startingAfter= from the URL inside <…>
+                seg = part.split(";")[0].strip().strip("<>")
+                qix = seg.find("startingAfter=")
+                if qix >= 0:
+                    m = seg[qix + len("startingAfter="):].split("&")[0]
+                break
+        if not m:
+            break
+        starting_after = m
+    return out
+
+
+def search_meraki_clients_by_mac(mac: str) -> list[dict]:
+    """Org-wide one-shot search for every network where Meraki has seen this
+    MAC. Returns a list of {mac, network: {id,name}, ...} or []. Use for
+    on-demand "where has this asset been?" lookups that bypass cache."""
+
+    bundle = _meraki_headers_or_none()
+    if bundle is None:
+        return []
+    headers, base, org_id, timeout = bundle
+    try:
+        resp = _meraki_get(
+            f"{base}/organizations/{org_id}/clients/search",
+            headers=headers,
+            params={"mac": mac},
+            timeout=timeout,
+        )
+        if resp.status_code in (400, 404):
+            return []
+        resp.raise_for_status()
+    except Exception:
+        return []
+    payload = resp.json() or {}
+    # Endpoint returns {"records": [...]} per Meraki v1 spec.
+    if isinstance(payload, dict):
+        return payload.get("records") or []
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def get_meraki_appliance_single_lan(network_id: str) -> dict | None:
+    """Fallback when VLANs aren't enabled — the single LAN config has the
+    same subnet + applianceIp fields. Returns None when the network has no
+    MX or this endpoint 404s."""
+
+    bundle = _meraki_headers_or_none()
+    if bundle is None:
+        return None
+    headers, base, _org_id, timeout = bundle
+    try:
+        resp = _meraki_get(
+            f"{base}/networks/{network_id}/appliance/singleLan",
+            headers=headers,
+            timeout=timeout,
+        )
+        if resp.status_code in (400, 404):
+            return None
+        resp.raise_for_status()
+    except Exception:
+        return None
+    return resp.json() or None
+
+
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

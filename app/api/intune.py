@@ -89,3 +89,60 @@ def get_intune_portal_url(
             "Asset has no Intune ID yet. Sync from Intune first.",
         )
     return IntunePortalUrlResponse(url=intune_service.device_portal_url(asset.intune_id))
+
+
+# ────────────────────────── Defender ─────────────────────────────────────
+
+
+class DefenderForensicsResponse(BaseModel):
+    """Result of triggering `collectInvestigationPackage` on Defender."""
+    asset_id: int
+    machine_id: str
+    action_id: str | None = None
+    status: str | None = None
+    requestor: str | None = None
+    request_source: str | None = None
+
+
+@router.post(
+    "/assets/{asset_id}/defender/collect-forensics",
+    response_model=DefenderForensicsResponse,
+)
+def collect_defender_forensics(
+    asset_id: int,
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    """Trigger Microsoft Defender to collect an investigation (forensic)
+    package on this asset's machine. Async on Defender's side — this
+    endpoint returns the machineAction record (Pending → InProgress → done).
+    Requires the `WindowsDefenderATP.Machine.CollectForensics` permission."""
+    from app.services import defender_service
+    from fastapi import HTTPException, status
+
+    asset = svc.get_asset(db, asset_id)
+    if not asset.defender_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Asset has no Defender machine id. Sync from Intune first "
+            "(Defender data is pulled during the same sync via aadDeviceId).",
+        )
+
+    actor_upn = getattr(auth, "user_upn", None) or getattr(auth, "email", None)
+    comment = f"Triggered from asset inventory (asset #{asset_id}) by {actor_upn or 'unknown'}"
+
+    try:
+        result = defender_service.collect_forensics(asset.defender_id, comment=comment)
+    except RuntimeError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
+    except Exception as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Defender call failed: {e}")
+
+    return DefenderForensicsResponse(
+        asset_id=asset_id,
+        machine_id=asset.defender_id,
+        action_id=str(result.get("id")) if result.get("id") else None,
+        status=result.get("status"),
+        requestor=result.get("requestor"),
+        request_source=result.get("requestSource"),
+    )

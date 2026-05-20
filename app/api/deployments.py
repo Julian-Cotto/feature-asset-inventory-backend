@@ -43,6 +43,7 @@ def list_deployments(
     status: str | None = None,
     type: str | None = None,
     q: str | None = None,
+    archived: bool = False,
     limit: int = 200,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -53,6 +54,7 @@ def list_deployments(
         status_filter=status,
         type_filter=type,
         q=q,
+        archived=archived,
         limit=limit,
         offset=offset,
     )
@@ -166,6 +168,34 @@ def cancel_deployment(
     auth: RequestAuthContext = Depends(require_manage()),
 ):
     return svc.cancel_deployment(db, deployment_id, actor_upn=_actor(auth))
+
+
+@router.post("/deployments/{deployment_id}/archive", response_model=DeploymentOut)
+def archive_deployment(
+    deployment_id: int,
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    return svc.archive_deployment(db, deployment_id, actor_upn=_actor(auth))
+
+
+@router.post("/deployments/{deployment_id}/unarchive", response_model=DeploymentOut)
+def unarchive_deployment(
+    deployment_id: int,
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    return svc.unarchive_deployment(db, deployment_id, actor_upn=_actor(auth))
+
+
+@router.delete("/deployments/{deployment_id}", status_code=204)
+def delete_deployment(
+    deployment_id: int,
+    db: Session = Depends(get_db),
+    _: RequestAuthContext = Depends(require_manage()),
+):
+    svc.delete_deployment(db, deployment_id)
+    return None
 
 
 @router.post(

@@ -92,6 +92,8 @@ class ShipmentOut(BaseModel):
     resolved_by_upn: str | None = None
     cancelled_at: datetime | None = None
     cancelled_by_upn: str | None = None
+    archived_at: datetime | None = None
+    archived_by_upn: str | None = None
 
     created_at: datetime
     updated_at: datetime

@@ -44,8 +44,10 @@ class DeploymentOut(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     cancelled_at: datetime | None = None
+    archived_at: datetime | None = None
     completed_by_upn: str | None = None
     cancelled_by_upn: str | None = None
+    archived_by_upn: str | None = None
 
     created_at: datetime
     updated_at: datetime

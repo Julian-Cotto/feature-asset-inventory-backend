@@ -130,6 +130,7 @@ def _pick_assets_for_auto_assign(
         return []
 
     from app.models import Location
+    from app.services.inventory_service import _available_clauses
 
     reserved_subq = (
         select(ShipmentItem.asset_id)
@@ -140,14 +141,13 @@ def _pick_assets_for_auto_assign(
 
     stmt = (
         select(Asset)
-        .join(Location, Location.id == Asset.location_id)
+        .outerjoin(Location, Location.id == Asset.location_id)
         .where(Asset.asset_type == asset_type)
         .where(Asset.archived_at.is_(None))
-        .where(Asset.status_code == "active")
-        .where(Asset.assigned_upn.is_(None))
-        .where(Location.type == "warehouse")
         .where(Asset.id.notin_(reserved_subq))
     )
+    for clause in _available_clauses():
+        stmt = stmt.where(clause)
     if model:
         stmt = stmt.where(Asset.model == model)
     if manufacturer:
@@ -279,10 +279,19 @@ def list_shipments(
     resolution: str | None = None,
     carrier_status: str | None = None,
     q: str | None = None,
+    archived: bool = False,
     limit: int = 200,
     offset: int = 0,
 ) -> list[Shipment]:
+    """archived=False (default): only non-archived. archived=True: only
+    archived. No way to fetch both at once — frontend toggles between the
+    two views."""
+
     stmt = select(Shipment)
+    if archived:
+        stmt = stmt.where(Shipment.archived_at.is_not(None))
+    else:
+        stmt = stmt.where(Shipment.archived_at.is_(None))
     if direction:
         stmt = stmt.where(Shipment.direction == direction)
     if resolution:
@@ -475,6 +484,39 @@ def cancel_shipment(
     db.commit()
     db.refresh(shipment)
     return shipment
+
+
+def archive_shipment(
+    db: Session, shipment_id: int, actor_upn: str | None
+) -> Shipment:
+    shipment = get_shipment(db, shipment_id)
+    if shipment.archived_at is not None:
+        return shipment
+    shipment.archived_at = _now()
+    shipment.archived_by_upn = actor_upn
+    db.commit()
+    db.refresh(shipment)
+    return shipment
+
+
+def unarchive_shipment(
+    db: Session, shipment_id: int, actor_upn: str | None
+) -> Shipment:
+    shipment = get_shipment(db, shipment_id)
+    shipment.archived_at = None
+    shipment.archived_by_upn = None
+    shipment.updated_by_upn = actor_upn
+    db.commit()
+    db.refresh(shipment)
+    return shipment
+
+
+def delete_shipment(db: Session, shipment_id: int) -> None:
+    """Hard delete. ShipmentItem + ShipmentEvent cascade via ORM."""
+
+    shipment = get_shipment(db, shipment_id)
+    db.delete(shipment)
+    db.commit()
 
 
 # ────────────────────────── Update header ────────────────────────────────

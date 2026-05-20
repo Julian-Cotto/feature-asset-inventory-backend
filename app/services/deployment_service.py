@@ -214,18 +214,18 @@ def _pick_assets_for_auto_assign(
     )
 
     from app.models import Location
+    from app.services.inventory_service import _available_clauses
 
     stmt = (
         select(Asset)
-        .join(Location, Location.id == Asset.location_id)
+        .outerjoin(Location, Location.id == Asset.location_id)
         .where(Asset.asset_type == asset_type)
         .where(Asset.archived_at.is_(None))
-        .where(Asset.status_code == "active")
-        .where(Asset.assigned_upn.is_(None))
-        .where(Location.type == "warehouse")
         .where(Asset.id.notin_(reserved_by_deployment))
         .where(Asset.id.notin_(reserved_by_shipment))
     )
+    for clause in _available_clauses():
+        stmt = stmt.where(clause)
     if model:
         stmt = stmt.where(Asset.model == model)
     if manufacturer:
@@ -330,10 +330,15 @@ def list_deployments(
     status_filter: str | None = None,
     type_filter: str | None = None,
     q: str | None = None,
+    archived: bool = False,
     limit: int = 200,
     offset: int = 0,
 ) -> list[Deployment]:
     stmt = select(Deployment)
+    if archived:
+        stmt = stmt.where(Deployment.archived_at.is_not(None))
+    else:
+        stmt = stmt.where(Deployment.archived_at.is_(None))
     if status_filter:
         stmt = stmt.where(Deployment.status == status_filter)
     if type_filter:
@@ -558,6 +563,45 @@ def cancel_deployment(
     db.commit()
     db.refresh(d)
     return d
+
+
+def archive_deployment(
+    db: Session, deployment_id: int, actor_upn: str | None
+) -> Deployment:
+    d = get_deployment(db, deployment_id)
+    if d.archived_at is not None:
+        return d
+    d.archived_at = _now()
+    d.archived_by_upn = actor_upn
+    d.updated_by_upn = actor_upn
+    db.commit()
+    db.refresh(d)
+    return d
+
+
+def unarchive_deployment(
+    db: Session, deployment_id: int, actor_upn: str | None
+) -> Deployment:
+    d = get_deployment(db, deployment_id)
+    d.archived_at = None
+    d.archived_by_upn = None
+    d.updated_by_upn = actor_upn
+    db.commit()
+    db.refresh(d)
+    return d
+
+
+def delete_deployment(db: Session, deployment_id: int) -> None:
+    """Hard delete. DeploymentItem cascades via ORM. Linked Shipments
+    (deployment_id FK) get deployment_id nulled by SQLAlchemy."""
+
+    d = get_deployment(db, deployment_id)
+    # Manually null shipment FKs since model doesn't define ondelete=SET NULL
+    for s in d.shipments:
+        s.deployment_id = None
+    db.flush()
+    db.delete(d)
+    db.commit()
 
 
 # ────────────────────────── Shipment linking ────────────────────────────

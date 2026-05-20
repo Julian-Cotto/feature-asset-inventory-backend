@@ -9,11 +9,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.deployments import router as deployments_router
 from app.api.feature import router as feature_router
+from app.api.groups import router as groups_router
 from app.api.health import router as health_router
 from app.api.intune import router as intune_router
+from app.api.meraki import router as meraki_router
 from app.api.inventory import router as inventory_router
 from app.api.lookup import router as lookup_router
+from app.api.networks import router as networks_router
 from app.api.shipments import router as shipments_router
+from app.api.software import router as software_router
+from app.api.users import router as users_router
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.models import inventory as _inventory_models  # noqa: F401  register ORM tables
@@ -88,6 +93,36 @@ def _migrate_legacy_statuses(db) -> None:
     db.commit()
 
 
+def _migrate_stock_to_brentwood(db) -> None:
+    """One-shot, idempotent. Normalize empty `assigned_upn` to NULL, then
+    park anything matching the "stock" UPN rule (NULL or 'join@hv.ltd')
+    at Brentwood-WH if it has no location yet."""
+
+    from sqlalchemy import text
+    from app.models import Location
+
+    # Empty string → NULL
+    db.execute(
+        text("UPDATE assets SET assigned_upn = NULL WHERE assigned_upn = ''")
+    )
+    brentwood = (
+        db.query(Location).filter(Location.code == "BRENTWOOD-WH").first()
+    )
+    if brentwood is None:
+        db.commit()
+        return
+    db.execute(
+        text(
+            "UPDATE assets SET location_id = :loc "
+            "WHERE archived_at IS NULL "
+            "AND location_id IS NULL "
+            "AND (assigned_upn IS NULL OR assigned_upn = 'join@hv.ltd')"
+        ),
+        {"loc": brentwood.id},
+    )
+    db.commit()
+
+
 def _apply_lightweight_migrations() -> None:
     """SQLite create_all is a no-op for existing tables. When we add new
     columns to ORM models we have to ALTER manually. Idempotent: each ADD
@@ -101,6 +136,20 @@ def _apply_lightweight_migrations() -> None:
             ("warranty_active", "BOOLEAN"),
             ("warranty_end_date", "DATETIME"),
             ("warranty_synced_at", "DATETIME"),
+            ("aad_device_id", "VARCHAR(64)"),
+            ("defender_id", "VARCHAR(64)"),
+            ("defender_synced_at", "DATETIME"),
+            ("defender_health_status", "VARCHAR(64)"),
+            ("defender_risk_score", "VARCHAR(32)"),
+            ("defender_exposure_level", "VARCHAR(32)"),
+            ("defender_last_seen_at", "DATETIME"),
+            ("defender_onboarding_status", "VARCHAR(32)"),
+            ("defender_av_status", "VARCHAR(32)"),
+            ("defender_os_build", "VARCHAR(64)"),
+            ("defender_last_ip", "VARCHAR(64)"),
+            ("defender_tags", "TEXT"),
+            ("network_id", "INTEGER"),
+            ("mac_address", "VARCHAR(32)"),
         ],
         "device_lookups": [
             ("warranty_active", "BOOLEAN"),
@@ -113,6 +162,39 @@ def _apply_lightweight_migrations() -> None:
             ("state", "VARCHAR(64)"),
             ("postal_code", "VARCHAR(32)"),
             ("country", "VARCHAR(64)"),
+        ],
+        "shipments": [
+            ("archived_at", "DATETIME"),
+            ("archived_by_upn", "VARCHAR(320)"),
+        ],
+        "deployments": [
+            ("archived_at", "DATETIME"),
+            ("archived_by_upn", "VARCHAR(320)"),
+        ],
+        "networks": [
+            ("corp_vlan_subnet", "VARCHAR(64)"),
+            ("corp_vlan_gateway_ip", "VARCHAR(64)"),
+        ],
+        "intune_users": [
+            ("sign_in_status", "VARCHAR(32) NOT NULL DEFAULT 'ok'"),
+            ("company_name", "VARCHAR(255)"),
+            ("employee_id", "VARCHAR(64)"),
+            ("employee_type", "VARCHAR(64)"),
+            ("employee_hire_date", "DATETIME"),
+            ("employee_org_division", "VARCHAR(255)"),
+            ("employee_org_cost_center", "VARCHAR(128)"),
+            ("street_address", "VARCHAR(255)"),
+            ("city", "VARCHAR(128)"),
+            ("state", "VARCHAR(128)"),
+            ("postal_code", "VARCHAR(32)"),
+            ("country", "VARCHAR(128)"),
+            ("mobile_phone", "VARCHAR(64)"),
+            ("business_phones_json", "TEXT"),
+            ("fax_number", "VARCHAR(64)"),
+            ("mail_nickname", "VARCHAR(255)"),
+            ("other_mails_json", "TEXT"),
+            ("proxy_addresses_json", "TEXT"),
+            ("im_addresses_json", "TEXT"),
         ],
     }
     with engine.begin() as conn:
@@ -198,6 +280,7 @@ def create_app() -> FastAPI:
                 seed_default_statuses(db)
                 seed_default_locations(db)
                 _migrate_legacy_statuses(db)
+                _migrate_stock_to_brentwood(db)
 
     @app.middleware("http")
     async def add_request_context(request: Request, call_next):
@@ -264,7 +347,60 @@ def create_app() -> FastAPI:
     app.include_router(lookup_router, prefix=settings.api_base_path)
     app.include_router(shipments_router, prefix=settings.api_base_path)
     app.include_router(intune_router, prefix=settings.api_base_path)
+    app.include_router(meraki_router, prefix=settings.api_base_path)
     app.include_router(deployments_router, prefix=settings.api_base_path)
+    app.include_router(users_router, prefix=settings.api_base_path)
+    app.include_router(groups_router, prefix=settings.api_base_path)
+    app.include_router(software_router, prefix=settings.api_base_path)
+    app.include_router(networks_router, prefix=settings.api_base_path)
+
+    # Background Defender cache warmer. Refreshes every CACHE_TTL_SECONDS
+    # (30 min). On startup, kicks off an initial refresh after a short
+    # delay so the first request never blocks on the bulk fetch.
+    @app.on_event("startup")
+    def _start_defender_cache_warmer() -> None:
+        import threading
+        from app.services import defender_service
+
+        log = logging.getLogger("defender")
+        stop_event = threading.Event()
+        app.state.defender_warmer_stop = stop_event
+
+        def _loop() -> None:
+            # Brief initial delay so app finishes booting first.
+            if stop_event.wait(timeout=10):
+                return
+            while not stop_event.is_set():
+                try:
+                    idx = defender_service.refresh_cache()
+                    log.info(
+                        "defender_warmer_refreshed",
+                        extra={
+                            "event": "defender_warmer_refreshed",
+                            "machines": len(idx),
+                        },
+                    )
+                except Exception as e:
+                    log.warning(
+                        "defender_warmer_failed",
+                        extra={"event": "defender_warmer_failed", "error": str(e)},
+                    )
+                # Wait the TTL; `wait` returns early if stop_event is set.
+                if stop_event.wait(timeout=defender_service.CACHE_TTL_SECONDS):
+                    return
+
+        t = threading.Thread(
+            target=_loop, name="defender-cache-warmer", daemon=True
+        )
+        t.start()
+        app.state.defender_warmer_thread = t
+
+    @app.on_event("shutdown")
+    def _stop_defender_cache_warmer() -> None:
+        stop = getattr(app.state, "defender_warmer_stop", None)
+        if stop is not None:
+            stop.set()
+
     return app
 
 

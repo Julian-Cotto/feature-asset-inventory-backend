@@ -62,6 +62,7 @@ def list_shipments(
     resolution: str | None = None,
     carrier_status: str | None = None,
     q: str | None = None,
+    archived: bool = False,
     limit: int = 200,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -73,6 +74,7 @@ def list_shipments(
         resolution=resolution,
         carrier_status=carrier_status,
         q=q,
+        archived=archived,
         limit=limit,
         offset=offset,
     )
@@ -174,6 +176,42 @@ def cancel_shipment(
         shipment_id,
         actor_upn=getattr(auth, "user_upn", None) or getattr(auth, "email", None),
     )
+
+
+@router.post("/shipments/{shipment_id}/archive", response_model=ShipmentOut)
+def archive_shipment(
+    shipment_id: int,
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    return svc.archive_shipment(
+        db,
+        shipment_id,
+        actor_upn=getattr(auth, "user_upn", None) or getattr(auth, "email", None),
+    )
+
+
+@router.post("/shipments/{shipment_id}/unarchive", response_model=ShipmentOut)
+def unarchive_shipment(
+    shipment_id: int,
+    db: Session = Depends(get_db),
+    auth: RequestAuthContext = Depends(require_manage()),
+):
+    return svc.unarchive_shipment(
+        db,
+        shipment_id,
+        actor_upn=getattr(auth, "user_upn", None) or getattr(auth, "email", None),
+    )
+
+
+@router.delete("/shipments/{shipment_id}", status_code=204)
+def delete_shipment(
+    shipment_id: int,
+    db: Session = Depends(get_db),
+    _: RequestAuthContext = Depends(require_manage()),
+):
+    svc.delete_shipment(db, shipment_id)
+    return None
 
 
 @router.post("/shipments/{shipment_id}/items", response_model=ShipmentItemOut)

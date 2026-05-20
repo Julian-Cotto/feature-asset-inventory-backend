@@ -4,7 +4,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-AssetType = Literal["laptop", "desktop", "thin_client"]
+AssetType = Literal[
+    "laptop",
+    "desktop",
+    "thin_client",
+    "ap",
+    "switch",
+    "gateway",
+]
 LocationType = Literal["warehouse", "site"]
 
 
@@ -99,9 +106,27 @@ class AssetOut(BaseModel):
     intune_ownership: str | None = None
     intune_compliance: str | None = None
     intune_last_check_in: datetime | None = None
+    aad_device_id: str | None = None
+    defender_id: str | None = None
+    defender_synced_at: datetime | None = None
+    defender_health_status: str | None = None
+    defender_risk_score: str | None = None
+    defender_exposure_level: str | None = None
+    defender_last_seen_at: datetime | None = None
+    defender_onboarding_status: str | None = None
+    defender_av_status: str | None = None
+    defender_os_build: str | None = None
+    defender_last_ip: str | None = None
+    defender_tags: str | None = None  # JSON array (string)
     warranty_active: bool | None = None
     warranty_end_date: datetime | None = None
     warranty_synced_at: datetime | None = None
+    mac_address: str | None = None
+    network_id: int | None = None
+    network_name: str | None = None
+    reserved_by_kind: str | None = None  # "deployment" | "shipment" | None
+    reserved_by_id: int | None = None
+    reserved_by_label: str | None = None
 
 
 class AssetCreate(BaseModel):
@@ -203,6 +228,22 @@ class DeploymentsStats(BaseModel):
 class SeriesPoint(BaseModel):
     date: str  # YYYY-MM-DD
     count: int
+
+
+class ReservationRow(BaseModel):
+    asset_id: int
+    asset_tag: str | None = None
+    serial_number: str
+    asset_type: str
+    manufacturer: str | None = None
+    model: str | None = None
+    intune_device_name: str | None = None
+    assigned_upn: str | None = None
+    kind: str  # "deployment" | "shipment"
+    source_id: int
+    source_label: str  # deployment name or shipment tracking #
+    source_status: str  # planning/in_progress | carrier_status
+    destination: str | None = None  # target / to location or address
 
 
 class DashboardStats(BaseModel):
